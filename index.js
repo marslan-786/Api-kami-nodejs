@@ -1,7 +1,5 @@
 const express = require('express');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -13,49 +11,36 @@ const CREDENTIALS = {
 };
 
 const BASE_URL = "http://51.89.99.105/NumberPanel";
+const DASHBOARD_URL = `${BASE_URL}/client/SMSCDRStats`; // یہاں سے SessKey ملے گی
+
 const HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Mobile Safari/537.36",
     "X-Requested-With": "XMLHttpRequest",
-    "Referer": `${BASE_URL}/client/SMSCDRStats`,
     "Origin": "http://51.89.99.105"
 };
 
-// URLs
-const URL_NUMBERS_BASE = "http://51.89.99.105/NumberPanel/client/res/data_smsnumbers.php?frange=&fclient=&sEcho=2&iColumns=6&sColumns=%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=-1&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=true&bSortable_1=true&mDataProp_2=2&sSearch_2=&bRegex_2=false&bSearchable_2=true&bSortable_2=true&mDataProp_3=3&sSearch_3=&bRegex_3=false&bSearchable_3=true&bSortable_3=true&mDataProp_4=4&sSearch_4=&bRegex_4=false&bSearchable_4=true&bSortable_4=true&mDataProp_5=5&sSearch_5=&bRegex_5=false&bSearchable_5=true&bSortable_5=true&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=asc&iSortingCols=1";
-const URL_OTP_BASE = "http://51.89.99.105/NumberPanel/client/res/data_smscdr.php?fdate1=2025-12-11%2000:00:00&fdate2=2025-12-11%2023:59:59&frange=&fnum=&fcli=&fgdate=&fgmonth=&fgrange=&fgnumber=&fgcli=&fg=0&sesskey=Q05RRkJQUEJCVQ==&sEcho=2&iColumns=7&sColumns=%2C%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=-1&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=true&bSortable_1=true&mDataProp_2=2&sSearch_2=&bRegex_2=false&bSearchable_2=true&bSortable_2=true&mDataProp_3=3&sSearch_3=&bRegex_3=false&bSearchable_3=true&bSortable_3=true&mDataProp_4=4&sSearch_4=&bRegex_4=false&bSearchable_4=true&bSortable_4=true&mDataProp_5=5&sSearch_5=&bRegex_5=false&bSearchable_5=true&bSortable_5=true&mDataProp_6=6&sSearch_6=&bRegex_6=false&bSearchable_6=true&bSortable_6=true&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=desc&iSortingCols=1";
+// --- GLOBAL STATE (میموری میں ڈیٹا محفوظ رہے گا) ---
+let STATE = {
+    cookie: null,
+    sessKey: null,
+    isLoggingIn: false
+};
 
-const COOKIE_FILE = path.join(__dirname, 'session_cookie.txt');
-let cachedCookie = "PHPSESSID=jfogu3u27tvo7p2fdkt8tfs4k8"; // Default Initial
-
-// --- SESSION MANAGER ---
-
-// Load cookie from file on startup
-if (fs.existsSync(COOKIE_FILE)) {
-    try {
-        const saved = fs.readFileSync(COOKIE_FILE, 'utf8').trim();
-        if (saved) {
-            cachedCookie = saved;
-            console.log("📂 Loaded Cookie:", cachedCookie);
-        }
-    } catch (e) { console.error("Cookie Load Error:", e); }
-}
-
-function saveCookie(cookie) {
-    cachedCookie = cookie;
-    fs.writeFileSync(COOKIE_FILE, cookie);
-}
-
+// --- 1. LOGIN & KEY EXTRACTOR ---
 async function performLogin() {
-    console.log("🔄 System: Logging in...");
+    if (STATE.isLoggingIn) return; // اگر پہلے سے لاگ ان ہو رہا ہے تو رک جائیں
+    STATE.isLoggingIn = true;
+    
+    console.log("🔄 System: Starting Fresh Login Process...");
+
     try {
-        // Create instance
         const instance = axios.create({ 
             withCredentials: true, 
             headers: HEADERS,
             timeout: 10000 
         });
 
-        // 1. Get Page
+        // Step A: Get Login Page & Cookie
         const r1 = await instance.get(`${BASE_URL}/login`);
         
         let tempCookie = "";
@@ -64,15 +49,13 @@ async function performLogin() {
             if (c) tempCookie = c.split(';')[0];
         }
 
+        // Step B: Solve Captcha
         const match = r1.data.match(/What is (\d+) \+ (\d+) = \?/);
-        if (!match) {
-            console.log("❌ Captcha Not Found");
-            return false;
-        }
-
-        const ans = parseInt(match[1]) + parseInt(match[2]);
+        if (!match) throw new Error("Captcha Not Found");
         
-        // 2. Post Data
+        const ans = parseInt(match[1]) + parseInt(match[2]);
+
+        // Step C: Post Login
         const params = new URLSearchParams();
         params.append('username', CREDENTIALS.username);
         params.append('password', CREDENTIALS.password);
@@ -88,90 +71,113 @@ async function performLogin() {
             validateStatus: () => true
         });
 
-        // Check new cookie
+        // Step D: Save Final Cookie
+        let finalCookie = tempCookie;
         if (r2.headers['set-cookie']) {
             const newC = r2.headers['set-cookie'].find(x => x.includes('PHPSESSID'));
-            if (newC) {
-                saveCookie(newC.split(';')[0]);
-                console.log("✅ Login Success:", cachedCookie);
-                return true;
-            }
+            if (newC) finalCookie = newC.split(';')[0];
         }
         
-        if (tempCookie) {
-            saveCookie(tempCookie);
-            console.log("✅ Login Success (Initial Cookie):", cachedCookie);
-            return true;
+        STATE.cookie = finalCookie;
+        console.log("✅ Login Success! Cookie:", finalCookie);
+
+        // Step E: Fetch Dashboard to get SessKey
+        // لاگ ان کے فوراً بعد ڈیش بورڈ کال کریں تاکہ SessKey مل جائے
+        const r3 = await axios.get(DASHBOARD_URL, {
+            headers: { ...HEADERS, "Cookie": STATE.cookie }
+        });
+
+        const keyMatch = r3.data.match(/sesskey=([a-zA-Z0-9%]+==?)/) || r3.data.match(/sesskey":"([a-zA-Z0-9%]+==?)"/);
+        
+        if (keyMatch && keyMatch[1]) {
+            STATE.sessKey = keyMatch[1];
+            console.log("🔑 SessKey Extracted:", STATE.sessKey);
+        } else {
+            console.log("⚠️ Could not extract SessKey, using default/old one if available.");
         }
 
-        return false;
-
     } catch (e) {
-        console.error("Login Error:", e.message);
-        return false;
+        console.error("❌ Login Failed:", e.message);
+    } finally {
+        STATE.isLoggingIn = false;
     }
 }
 
-// --- KEEP ALIVE LOOP ---
+// --- 2. KEEP ALIVE (PING) ---
+// یہ فنکشن ہر 1 منٹ بعد سرور کو پنگ کرے گا تاکہ سیشن زندہ رہے
 setInterval(async () => {
+    if (!STATE.cookie || !STATE.sessKey) return;
+
     try {
         const ts = Date.now();
-        // Ping OTP url to keep session active (Lightweight check)
-        const checkUrl = `${URL_OTP_BASE}&_=${ts}`;
-        
-        const r = await axios.get(checkUrl, {
-            headers: { ...HEADERS, "Cookie": cachedCookie },
-            timeout: 5000,
-            responseType: 'text' // Don't parse JSON to save CPU
+        // ہم ایک ہلکی API کو کال کرتے ہیں تاکہ سیشن ایکٹو رہے
+        // نوٹ: ہم ڈیٹا پروسیس نہیں کر رہے، بس کنکشن بنا رہے ہیں
+        await axios.get(`${BASE_URL}/client/res/data_smscdr.php?check=ping&_=${ts}`, {
+            headers: { ...HEADERS, "Cookie": STATE.cookie },
+            timeout: 5000
         });
-
-        if (typeof r.data === 'string' && (r.data.includes('login') || r.data.includes('Direct Script'))) {
-            console.log("⚠️ Background: Session Dead. Logging in...");
-            await performLogin();
-        }
+        // console.log("💓 Ping sent to keep session alive.");
     } catch (e) {
         // Silent fail
     }
-}, 30000); // Every 30 seconds
+}, 60000); // 60 Seconds
 
-// --- API SERVER ---
+// --- 3. API HANDLER ---
 
-app.get('/', (req, res) => res.send("🚀 Fast Node.js API on Railway!"));
+app.get('/', (req, res) => res.send("🚀 Railway API with Permanent Session!"));
 
 app.get('/api', async (req, res) => {
     const { type } = req.query;
-    const ts = Date.now();
+    
+    // اگر سیشن نہیں ہے تو پہلے لاگ ان کریں
+    if (!STATE.cookie || !STATE.sessKey) {
+        await performLogin();
+    }
 
+    const ts = Date.now();
     let targetUrl = "";
-    if (type === 'number') targetUrl = `${URL_NUMBERS_BASE}&_=${ts}`;
-    else if (type === 'sms') targetUrl = `${URL_OTP_BASE}&_=${ts}`;
-    else return res.status(400).json({ error: "Invalid type" });
+
+    // Dynamic URL Generation using stored SessKey
+    if (type === 'number') {
+        targetUrl = `${BASE_URL}/client/res/data_smsnumbers.php?frange=&fclient=&sEcho=2&iColumns=6&sColumns=%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=-1&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=true&bSortable_1=true&mDataProp_2=2&sSearch_2=&bRegex_2=false&bSearchable_2=true&bSortable_2=true&mDataProp_3=3&sSearch_3=&bRegex_3=false&bSearchable_3=true&bSortable_3=true&mDataProp_4=4&sSearch_4=&bRegex_4=false&bSearchable_4=true&bSortable_4=true&mDataProp_5=5&sSearch_5=&bRegex_5=false&bSearchable_5=true&bSortable_5=true&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=asc&iSortingCols=1&_=${ts}`;
+    } else if (type === 'sms') {
+        targetUrl = `${BASE_URL}/client/res/data_smscdr.php?fdate1=2025-12-11%2000:00:00&fdate2=2025-12-11%2023:59:59&frange=&fnum=&fcli=&fgdate=&fgmonth=&fgrange=&fgnumber=&fgcli=&fg=0&sesskey=${STATE.sessKey}&sEcho=2&iColumns=7&sColumns=%2C%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=-1&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=true&bSortable_1=true&mDataProp_2=2&sSearch_2=&bRegex_2=false&bSearchable_2=true&bSortable_2=true&mDataProp_3=3&sSearch_3=&bRegex_3=false&bSearchable_3=true&bSortable_3=true&mDataProp_4=4&sSearch_4=&bRegex_4=false&bSearchable_4=true&bSortable_4=true&mDataProp_5=5&sSearch_5=&bRegex_5=false&bSearchable_5=true&bSortable_5=true&mDataProp_6=6&sSearch_6=&bRegex_6=false&bSearchable_6=true&bSortable_6=true&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=desc&iSortingCols=1&_=${ts}`;
+    } else {
+        return res.status(400).json({ error: "Invalid type" });
+    }
 
     try {
-        // 🚀 SUPER FAST REQUEST
-        const response = await axios.get(targetUrl, {
-            headers: { ...HEADERS, "Cookie": cachedCookie },
-            responseType: 'arraybuffer', // Raw Binary Data (Fastest)
-            timeout: 20000
+        // Fast Request (Binary Mode)
+        let response = await axios.get(targetUrl, {
+            headers: { ...HEADERS, "Cookie": STATE.cookie },
+            responseType: 'arraybuffer', 
+            timeout: 25000
         });
 
-        // Check for login error in the raw buffer (First 100 bytes is enough)
-        const startOfData = response.data.subarray(0, 500).toString('utf-8');
-        
-        if (startOfData.includes('<html') || startOfData.includes('login')) {
-            console.log("⚠️ Session Expired during request. Refreshing...");
+        // Check if session expired (HTML received instead of JSON)
+        // ہم ڈیٹا کے شروع کے 500 بائٹس چیک کرتے ہیں
+        const checkData = response.data.subarray(0, 500).toString();
+
+        if (checkData.includes('<html') || checkData.includes('login') || checkData.includes('Direct Script')) {
+            console.log("⚠️ Session Expired (HTML received). Re-logging...");
+            
+            // Re-login
             await performLogin();
-            // Retry once
-            const retry = await axios.get(targetUrl, {
-                headers: { ...HEADERS, "Cookie": cachedCookie },
+
+            // لنک دوبارہ بنائیں (کیونکہ sessKey بدل گئی ہوگی)
+            if (type === 'sms') {
+                targetUrl = targetUrl.replace(/sesskey=([^&]+)/, `sesskey=${STATE.sessKey}`);
+            }
+
+            // Retry Request
+            response = await axios.get(targetUrl, {
+                headers: { ...HEADERS, "Cookie": STATE.cookie },
                 responseType: 'arraybuffer',
-                timeout: 20000
+                timeout: 25000
             });
-            res.set('Content-Type', 'application/json');
-            return res.send(retry.data);
         }
 
-        // Direct Pipe Output (Raw Speed)
+        // Send Raw JSON (Super Fast)
         res.set('Content-Type', 'application/json');
         res.send(response.data);
 
@@ -180,8 +186,8 @@ app.get('/api', async (req, res) => {
     }
 });
 
+// Start Server & Initial Login
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    // Initial login attempt on start
-    if (!fs.existsSync(COOKIE_FILE)) performLogin();
+    performLogin(); // ایپ چلتے ہی پہلا لاگ ان کر لے
 });
