@@ -6,11 +6,11 @@ const PORT = process.env.PORT || 5000;
 
 // --- CONFIGURATION ---
 const CREDENTIALS = {
-    username: "Kami522",
-    password: "Kami526"
+    username: "Kami526",
+    password: "Kamran52"
 };
 
-const BASE_URL = "http://51.89.99.105/NumberPanel";
+const BASE_URL = "http://51.89.99.105/NumberPanel/agent";
 const DASHBOARD_URL = `${BASE_URL}/client/SMSCDRStats`; 
 
 const HEADERS = {
