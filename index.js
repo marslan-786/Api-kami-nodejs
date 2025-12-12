@@ -12,7 +12,7 @@ const CREDENTIALS = {
 
 const BASE_URL = "http://51.89.99.105/NumberPanel";
 // Agent Dashboard URL for SessKey extraction
-const DASHBOARD_URL = `${BASE_URL}/agent/SMSDashboard`; 
+const DASHBOARD_URL = `${BASE_URL}/agent/SMSCDRReports`; 
 
 const COMMON_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Mobile Safari/537.36",
