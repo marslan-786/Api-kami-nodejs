@@ -4,15 +4,16 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// --- CONFIGURATION (UPDATED FOR AGENT) ---
+// --- CONFIGURATION (AGENT) ---
 const CREDENTIALS = {
-    username: "Kami526",  // New Agent Username
-    password: "Kamran52"  // New Agent Password
+    username: "Kami526",
+    password: "Kamran52"
 };
 
 const BASE_URL = "http://51.89.99.105/NumberPanel";
-// Agent Dashboard URL for SessKey extraction
-const DASHBOARD_URL = `${BASE_URL}/agent/SMSCDRReports`; 
+
+// 🔥 CHANGE: Key now comes from Reports Page, not Dashboard
+const KEY_SOURCE_URL = `${BASE_URL}/agent/SMSCDRReports`; 
 
 const COMMON_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Mobile Safari/537.36",
@@ -29,7 +30,7 @@ let STATE = {
     lastUpdate: 0
 };
 
-// --- HELPER: GET CURRENT DATE (YYYY-MM-DD) ---
+// --- HELPER: GET CURRENT DATE ---
 function getTodayDate() {
     const d = new Date();
     const year = d.getFullYear();
@@ -40,12 +41,16 @@ function getTodayDate() {
 
 // --- HELPER: FIND KEY IN HTML ---
 function extractKey(html) {
+    // 1. Look specifically for sAjaxSource pattern first (Most likely for this page)
+    // Matches: sesskey=XYZ inside a string
     let match = html.match(/sesskey=([^&"']+)/);
     if (match) return match[1];
 
+    // 2. JavaScript variable fallback
     match = html.match(/sesskey\s*[:=]\s*["']([^"']+)["']/);
     if (match) return match[1];
 
+    // 3. JSON pattern fallback
     match = html.match(/sesskey":"([^"]+)"/);
     if (match) return match[1];
 
@@ -107,11 +112,16 @@ async function performLogin() {
         
         console.log("✅ Agent Login Success. Cookie:", STATE.cookie);
 
-        // E. EXTRACT SESSKEY (From Agent Dashboard)
-        console.log("🕵️ Hunting for SessKey on Agent Dashboard...");
+        // E. EXTRACT SESSKEY (From SMSCDRReports)
+        console.log("🕵️ Fetching Reports Page to find SessKey...");
         
-        const r3 = await axios.get(DASHBOARD_URL, {
-            headers: { ...COMMON_HEADERS, "Cookie": STATE.cookie },
+        const r3 = await axios.get(KEY_SOURCE_URL, {
+            headers: { 
+                ...COMMON_HEADERS, 
+                "Cookie": STATE.cookie,
+                // Referer must be dashboard or valid internal link
+                "Referer": `${BASE_URL}/agent/SMSDashboard` 
+            },
             timeout: 15000
         });
 
@@ -120,10 +130,11 @@ async function performLogin() {
         if (foundKey) {
             STATE.sessKey = foundKey;
             STATE.lastUpdate = Date.now();
-            console.log("🔥 SessKey FOUND:", STATE.sessKey);
+            console.log("🔥 SessKey FOUND in Reports Page:", STATE.sessKey);
         } else {
-            console.log("❌ CRITICAL: SessKey NOT found in Agent HTML. Check Logs.");
-            // console.log("HTML Snippet:", r3.data.substring(0, 500)); 
+            console.log("❌ CRITICAL: SessKey NOT found in SMSCDRReports HTML.");
+            // Debug: Check if we are on the right page
+            // console.log(r3.data.substring(0, 1000));
         }
 
     } catch (e) {
@@ -145,26 +156,25 @@ app.get('/', (req, res) => res.send(`🚀 Agent API Running.<br>Cookie: ${STATE.
 app.get('/api', async (req, res) => {
     const { type } = req.query;
     
+    // Check Session
     if (!STATE.cookie || !STATE.sessKey) {
         await performLogin();
         if (!STATE.sessKey) return res.status(500).json({error: "Server Error: Could not fetch SessKey"});
     }
 
     const ts = Date.now();
-    const today = getTodayDate(); // e.g. 2025-12-12
+    const today = getTodayDate();
     let targetUrl = "";
     let specificReferer = "";
 
     // --- AGENT URL CONSTRUCTION ---
     if (type === 'number') {
-        // Agent Number URL (Notice: data_smsnumbers2.php)
-        // Referer: .../agent/MySMSNumbers2
+        // Numbers URL
         specificReferer = `${BASE_URL}/agent/MySMSNumbers2`;
         targetUrl = `${BASE_URL}/agent/res/data_smsnumbers2.php?frange=&fclient=&fallocated=&sEcho=2&iColumns=8&sColumns=%2C%2C%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=-1&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=false&bSortable_0=false&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=false&bSortable_1=true&mDataProp_2=2&sSearch_2=&bRegex_2=false&bSearchable_2=false&bSortable_2=true&mDataProp_3=3&sSearch_3=&bRegex_3=false&bSearchable_3=true&bSortable_3=true&mDataProp_4=4&sSearch_4=&bRegex_4=false&bSearchable_4=false&bSortable_4=true&mDataProp_5=5&sSearch_5=&bRegex_5=false&bSearchable_5=false&bSortable_5=true&mDataProp_6=6&sSearch_6=&bRegex_6=false&bSearchable_6=false&bSortable_6=true&mDataProp_7=7&sSearch_7=&bRegex_7=false&bSearchable_7=false&bSortable_7=false&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=asc&iSortingCols=1&_=${ts}`;
     
     } else if (type === 'sms') {
-        // Agent SMS URL (Notice: 9 columns instead of 7)
-        // Referer: .../agent/SMSCDRReports
+        // SMS URL (Using the extracted SessKey)
         specificReferer = `${BASE_URL}/agent/SMSCDRReports`;
         targetUrl = `${BASE_URL}/agent/res/data_smscdr.php?fdate1=${today}%2000:00:00&fdate2=${today}%2023:59:59&frange=&fclient=&fnum=&fcli=&fgdate=&fgmonth=&fgrange=&fgclient=&fgnumber=&fgcli=&fg=0&sesskey=${STATE.sessKey}&sEcho=2&iColumns=9&sColumns=%2C%2C%2C%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=-1&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=true&bSortable_1=true&mDataProp_2=2&sSearch_2=&bRegex_2=false&bSearchable_2=true&bSortable_2=true&mDataProp_3=3&sSearch_3=&bRegex_3=false&bSearchable_3=true&bSortable_3=true&mDataProp_4=4&sSearch_4=&bRegex_4=false&bSearchable_4=true&bSortable_4=true&mDataProp_5=5&sSearch_5=&bRegex_5=false&bSearchable_5=true&bSortable_5=true&mDataProp_6=6&sSearch_6=&bRegex_6=false&bSearchable_6=true&bSortable_6=true&mDataProp_7=7&sSearch_7=&bRegex_7=false&bSearchable_7=true&bSortable_7=true&mDataProp_8=8&sSearch_8=&bRegex_8=false&bSearchable_8=true&bSortable_8=false&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=desc&iSortingCols=1&_=${ts}`;
     
@@ -179,7 +189,7 @@ app.get('/api', async (req, res) => {
             headers: { 
                 ...COMMON_HEADERS, 
                 "Cookie": STATE.cookie,
-                "Referer": specificReferer // Important for Agent panel
+                "Referer": specificReferer
             },
             responseType: 'arraybuffer', 
             timeout: 25000
