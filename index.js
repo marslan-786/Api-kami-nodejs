@@ -6,7 +6,7 @@ const PORT = process.env.PORT || 5000;
 
 // --- CONFIGURATION (CLIENT) ---
 const CREDENTIALS = {
-    username: "Kami555", // Client Username
+    username: "Kami527", // Client Username
     password: "Kami526"  // Client Password
 };
 
