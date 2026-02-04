@@ -1,5 +1,5 @@
 const express = require('express');
-const got = require('got'); // New Library
+const got = require('got'); 
 const { CookieJar } = require('tough-cookie');
 const cheerio = require('cheerio');
 const moment = require('moment-timezone');
@@ -7,7 +7,6 @@ const moment = require('moment-timezone');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// کوکیز کا نیا اور سادہ سسٹم
 const cookieJar = new CookieJar();
 const client = got.extend({
     cookieJar,
@@ -15,11 +14,10 @@ const client = got.extend({
         'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36'
     },
     retry: {
-        limit: 2 // اگر فیل ہو تو 2 بار دوبارہ کوشش کرے
+        limit: 2 
     }
 });
 
-// کنفیگریشن
 const TARGET_HOST = 'http://51.89.99.105';
 const LOGIN_URL = `${TARGET_HOST}/NumberPanel/login`;
 const SIGNIN_URL = `${TARGET_HOST}/NumberPanel/signin`;
@@ -31,7 +29,7 @@ const PASSWORD = process.env.PANEL_PASS || 'Kamran52';
 
 let cachedNumberData = null;
 let lastFetchTime = 0;
-const CACHE_DURATION = 5 * 60 * 1000; // 5 منٹ
+const CACHE_DURATION = 5 * 60 * 1000; 
 
 // --- Helper Functions ---
 
@@ -52,7 +50,7 @@ async function ensureLoggedIn() {
 
         console.log('Logging in...');
         
-        // Got library فارم ڈیٹا خود ہینڈل کرتی ہے
+        
         await client.post(SIGNIN_URL, {
             form: {
                 username: USERNAME,
@@ -102,13 +100,13 @@ app.get('/api/numbers', async (req, res) => {
             _: Date.now()
         });
 
-        // Got استعمال کرتے ہوئے ڈیٹا فیچنگ
+        
         const response = await client.get(`${DATA_URL}?${searchParams.toString()}`, {
             headers: {
                 'Referer': `${TARGET_HOST}/NumberPanel/agent/SMSNumberStats`,
                 'X-Requested-With': 'XMLHttpRequest'
             },
-            responseType: 'json' // آٹومیٹک JSON پارسنگ
+            responseType: 'json' 
         });
 
         cachedNumberData = response.body;
@@ -124,7 +122,7 @@ app.get('/api/numbers', async (req, res) => {
 // 2. SMS API
 app.get('/api/sms', async (req, res) => {
     try {
-        // عام API کال کے لیے سادہ got استعمال کریں
+        
         const response = await got.get(SMS_API_URL, { responseType: 'json' });
         const rawData = response.body;
 
