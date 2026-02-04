@@ -23,10 +23,10 @@ const TARGET_HOST = 'http://51.89.99.105';
 const LOGIN_URL = `${TARGET_HOST}/NumberPanel/login`;
 const SIGNIN_URL = `${TARGET_HOST}/NumberPanel/signin`;
 const DATA_URL = `${TARGET_HOST}/NumberPanel/agent/res/data_smsnumberstats.php`;
-const SMS_API_URL = 'http://147.135.212.197/crapi/st/viewstats?token=RVZUQ0pBUzR5d3NZgYuPiEN0hkRoYpVXiE6BVnJRiVtIlohqU4hmaw==&records=100';
+const SMS_API_URL = 'http://147.135.212.197/crapi/st/viewstats?token=RVVUSkVBUzRHaothilCXX2KEa4FViFFBa5CVQWaYmGJbjVdaX2x4Vg==&records=100';
 
-const USERNAME = process.env.PANEL_USER || 'Broken007';
-const PASSWORD = process.env.PANEL_PASS || 'Broken007';
+const USERNAME = process.env.PANEL_USER || 'Kami526';
+const PASSWORD = process.env.PANEL_PASS || 'Kamran5.';
 
 let cachedNumberData = null;
 let lastFetchTime = 0;
