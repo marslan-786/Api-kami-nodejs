@@ -26,7 +26,7 @@ const DATA_URL = `${TARGET_HOST}/NumberPanel/agent/res/data_smsnumberstats.php`;
 const SMS_API_URL = 'http://147.135.212.197/crapi/st/viewstats?token=RVVUSkVBUzRHaothilCXX2KEa4FViFFBa5CVQWaYmGJbjVdaX2x4Vg==&records=100';
 
 const USERNAME = process.env.PANEL_USER || 'Kami526';
-const PASSWORD = process.env.PANEL_PASS || 'Kamran5.';
+const PASSWORD = process.env.PANEL_PASS || 'Kamran52';
 
 let cachedNumberData = null;
 let lastFetchTime = 0;
