@@ -3,6 +3,7 @@ const got = require('got');
 const { CookieJar } = require('tough-cookie');
 const cheerio = require('cheerio');
 const moment = require('moment-timezone');
+const { parsePhoneNumber } = require('libphonenumber-js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -33,6 +34,26 @@ const CACHE_DURATION = 5 * 60 * 1000;
 
 // --- Helper Functions ---
 
+function getCountryFromNumber(number) {
+    if (!number) return "Unknown";
+    try {
+
+        const strNum = number.toString().startsWith('+') ? number.toString() : '+' + number.toString();
+
+        const phoneNumber = parsePhoneNumber(strNum);
+
+        if (phoneNumber && phoneNumber.country) {
+
+            const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+            return regionNames.of(phoneNumber.country);
+        }
+        return "International";
+    } catch (error) {
+
+        return "Unknown";
+    }
+}
+
 async function ensureLoggedIn() {
     try {
         console.log('Fetching Login Page...');
@@ -49,7 +70,6 @@ async function ensureLoggedIn() {
         }
 
         console.log('Logging in...');
-        
         
         await client.post(SIGNIN_URL, {
             form: {
@@ -71,7 +91,7 @@ async function ensureLoggedIn() {
 // --- Routes ---
 
 app.get('/', (req, res) => {
-    res.send('Number Panel Proxy (Powered by GOT) is Running!');
+    res.send('Number Panel Proxy (Powered by LibPhoneNumber) is Running!');
 });
 
 // 1. Numbers API
@@ -99,7 +119,6 @@ app.get('/api/numbers', async (req, res) => {
             sSortDir_0: 'desc', iSortingCols: 1,
             _: Date.now()
         });
-
         
         const response = await client.get(`${DATA_URL}?${searchParams.toString()}`, {
             headers: {
@@ -119,31 +138,39 @@ app.get('/api/numbers', async (req, res) => {
     }
 });
 
-// 2. SMS API
+// 2. SMS API (With Library Logic)
 app.get('/api/sms', async (req, res) => {
     try {
-        
         const response = await got.get(SMS_API_URL, { responseType: 'json' });
         const rawData = response.body;
 
+        // 1. Map Data
         const formattedData = rawData.map(item => {
             return [
-                item[3],                          // Date
-                "Burundi-Ecno-KM-Auto",           // Country
-                item[1],                          // Phone
-                item[0],                          // Service
-                "Kami527",                        // User
-                item[2],                          // Message
-                "$",                              // Currency
-                0.012,                            // Price
-                0                                 // Flag
+                item[3],                          // 0. Date
+                getCountryFromNumber(item[1]),    // 1. Country Name (Library generated)
+                item[1],                          // 2. Phone Number
+                item[0],                          // 3. Service Name (e.g. WhatsApp)
+                item[2],                          // 4. Message Content
+                "$",                              // 5. Currency 1
+                "€",                              // 6. Currency 2
+                0.005                             // 7. Price
             ];
         });
 
+        const totalRecords = formattedData.length;
+
+        // 2. Add the Summary/Footer Row
+        formattedData.push([
+            "0,0.05,0,0,0,0,0,0.05,0,0,100%,0,9",
+            0, 0, 0, "", "$", 0, 0
+        ]);
+
+        // 3. Send Response
         res.json({
             "sEcho": 1,
-            "iTotalRecords": formattedData.length,
-            "iTotalDisplayRecords": formattedData.length,
+            "iTotalRecords": totalRecords.toString(), 
+            "iTotalDisplayRecords": totalRecords.toString(),
             "aaData": formattedData
         });
 

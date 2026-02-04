@@ -12,7 +12,8 @@
     "tough-cookie": "^4.1.3",
     "cheerio": "1.0.0-rc.12",
     "moment": "^2.29.4",
-    "moment-timezone": "^0.5.43"
+    "moment-timezone": "^0.5.43",
+    "libphonenumber-js": "^1.10.49"
   },
   "engines": {
     "node": "22.x"
