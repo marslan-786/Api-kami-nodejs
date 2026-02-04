@@ -1,17 +1,25 @@
 const express = require('express');
-const axios = require('axios');
-const { wrapper } = require('axios-cookie-jar-support');
+const got = require('got'); // New Library
 const { CookieJar } = require('tough-cookie');
 const cheerio = require('cheerio');
 const moment = require('moment-timezone');
 
 const app = express();
-
 const PORT = process.env.PORT || 3000;
 
-const jar = new CookieJar();
-const client = wrapper(axios.create({ jar }));
+// کوکیز کا نیا اور سادہ سسٹم
+const cookieJar = new CookieJar();
+const client = got.extend({
+    cookieJar,
+    headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36'
+    },
+    retry: {
+        limit: 2 // اگر فیل ہو تو 2 بار دوبارہ کوشش کرے
+    }
+});
 
+// کنفیگریشن
 const TARGET_HOST = 'http://51.89.99.105';
 const LOGIN_URL = `${TARGET_HOST}/NumberPanel/login`;
 const SIGNIN_URL = `${TARGET_HOST}/NumberPanel/signin`;
@@ -23,18 +31,16 @@ const PASSWORD = process.env.PANEL_PASS || 'Kamran52';
 
 let cachedNumberData = null;
 let lastFetchTime = 0;
-const CACHE_DURATION = 5 * 60 * 1000;
+const CACHE_DURATION = 5 * 60 * 1000; // 5 منٹ
+
+// --- Helper Functions ---
 
 async function ensureLoggedIn() {
     try {
         console.log('Fetching Login Page...');
-        const loginPage = await client.get(LOGIN_URL, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36'
-            }
-        });
+        const loginPage = await client.get(LOGIN_URL);
 
-        const $ = cheerio.load(loginPage.data);
+        const $ = cheerio.load(loginPage.body);
         const labelText = $('label:contains("What is")').text();
         const match = labelText.match(/(\d+)\s*\+\s*(\d+)/);
         
@@ -45,16 +51,16 @@ async function ensureLoggedIn() {
         }
 
         console.log('Logging in...');
-        const params = new URLSearchParams();
-        params.append('username', USERNAME);
-        params.append('password', PASSWORD);
-        params.append('capt', captchaAnswer);
-
-        await client.post(SIGNIN_URL, params, {
+        
+        // Got library فارم ڈیٹا خود ہینڈل کرتی ہے
+        await client.post(SIGNIN_URL, {
+            form: {
+                username: USERNAME,
+                password: PASSWORD,
+                capt: captchaAnswer
+            },
             headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Referer': LOGIN_URL,
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36'
+                'Referer': LOGIN_URL
             }
         });
         console.log('Login successful.');
@@ -64,11 +70,13 @@ async function ensureLoggedIn() {
     }
 }
 
+// --- Routes ---
 
 app.get('/', (req, res) => {
-    res.send('Number Panel Proxy is Running on Railway!');
+    res.send('Number Panel Proxy (Powered by GOT) is Running!');
 });
 
+// 1. Numbers API
 app.get('/api/numbers', async (req, res) => {
     try {
         const currentTime = Date.now();
@@ -84,7 +92,7 @@ app.get('/api/numbers', async (req, res) => {
         const fdate1 = '2026-01-01 00:00:00';
         const fdate2 = moment().tz("Asia/Karachi").format('YYYY-MM-DD 23:59:59');
 
-        const params = new URLSearchParams({
+        const searchParams = new URLSearchParams({
             fdate1: fdate1,
             fdate2: fdate2,
             sEcho: 4, iColumns: 5, sColumns: ',,,,',
@@ -94,27 +102,31 @@ app.get('/api/numbers', async (req, res) => {
             _: Date.now()
         });
 
-        const response = await client.get(`${DATA_URL}?${params.toString()}`, {
+        // Got استعمال کرتے ہوئے ڈیٹا فیچنگ
+        const response = await client.get(`${DATA_URL}?${searchParams.toString()}`, {
             headers: {
                 'Referer': `${TARGET_HOST}/NumberPanel/agent/SMSNumberStats`,
                 'X-Requested-With': 'XMLHttpRequest'
-            }
+            },
+            responseType: 'json' // آٹومیٹک JSON پارسنگ
         });
 
-        cachedNumberData = response.data;
+        cachedNumberData = response.body;
         lastFetchTime = currentTime;
         res.json(cachedNumberData);
 
     } catch (error) {
-        console.error(error);
+        console.error('Error fetching numbers:', error.message);
         res.status(500).json({ error: 'Failed to fetch number stats' });
     }
 });
 
+// 2. SMS API
 app.get('/api/sms', async (req, res) => {
     try {
-        const response = await axios.get(SMS_API_URL);
-        const rawData = response.data;
+        // عام API کال کے لیے سادہ got استعمال کریں
+        const response = await got.get(SMS_API_URL, { responseType: 'json' });
+        const rawData = response.body;
 
         const formattedData = rawData.map(item => {
             return [
@@ -138,7 +150,7 @@ app.get('/api/sms', async (req, res) => {
         });
 
     } catch (error) {
-        console.error(error);
+        console.error('Error fetching SMS:', error.message);
         res.status(500).json({ error: 'Failed to fetch SMS data' });
     }
 });
