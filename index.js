@@ -8,19 +8,20 @@ const { parsePhoneNumber } = require('libphonenumber-js');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* ===================== CLIENT ===================== */
+/* ================= CLIENT ================= */
 const cookieJar = new CookieJar();
+
 const client = got.extend({
   cookieJar,
   timeout: { request: 20000 },
   headers: {
     'User-Agent':
-      'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36'
+      'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome Mobile Safari/537.36'
   },
   retry: { limit: 1 }
 });
 
-/* ===================== CONFIG ===================== */
+/* ================= CONFIG ================= */
 const TARGET_HOST = 'http://51.89.99.105';
 const LOGIN_URL = `${TARGET_HOST}/NumberPanel/login`;
 const SIGNIN_URL = `${TARGET_HOST}/NumberPanel/signin`;
@@ -32,22 +33,22 @@ const SMS_API_URL =
 const USERNAME = process.env.PANEL_USER || 'Kami526';
 const PASSWORD = process.env.PANEL_PASS || 'Kamran52';
 
-/* ===================== CACHE ===================== */
-let cachedNumberData = null;
-let lastNumberFetch = 0;
-const NUMBER_CACHE = 5 * 60 * 1000;
+/* ================= CACHE ================= */
+let cachedNumbers = null;
+let lastNumbersFetch = 0;
+const NUMBERS_CACHE_TIME = 5 * 60 * 1000;
 
 let lastSmsFetch = 0;
 const SMS_COOLDOWN = 6000;
 
-/* ===================== HELPERS ===================== */
+/* ================= HELPERS ================= */
 function getCountryFromNumber(number) {
   try {
     if (!number) return 'Unknown';
     const n = number.startsWith('+') ? number : `+${number}`;
-    const p = parsePhoneNumber(n);
-    if (p && p.country) {
-      return new Intl.DisplayNames(['en'], { type: 'region' }).of(p.country);
+    const phone = parsePhoneNumber(n);
+    if (phone && phone.country) {
+      return new Intl.DisplayNames(['en'], { type: 'region' }).of(phone.country);
     }
     return 'International';
   } catch {
@@ -55,41 +56,47 @@ function getCountryFromNumber(number) {
   }
 }
 
-/* ===================== LOGIN ===================== */
+/* ================= LOGIN ================= */
 async function ensureLoggedIn() {
   try {
     const r = await client.get(LOGIN_URL);
     const $ = cheerio.load(r.body);
     const txt = $('label:contains("What is")').text();
     const m = txt.match(/(\d+)\s*\+\s*(\d+)/);
-    const capt = m ? parseInt(m[1]) + parseInt(m[2]) : 10;
+    const capt = m ? Number(m[1]) + Number(m[2]) : 10;
 
     await client.post(SIGNIN_URL, {
-      form: { username: USERNAME, password: PASSWORD, capt },
+      form: {
+        username: USERNAME,
+        password: PASSWORD,
+        capt
+      },
       headers: { Referer: LOGIN_URL }
     });
   } catch (e) {
-    console.log('Login error (ignored):', e.message);
+    console.log('⚠️ Login error ignored:', e.message);
   }
 }
 
-/* ===================== ROUTES ===================== */
+/* ================= ROUTES ================= */
 app.get('/', (req, res) => {
-  res.send('✅ Number Panel Proxy Running');
+  res.send('✅ NumberPanel Proxy Running');
 });
 
-/* -------- NUMBERS API -------- */
+/* -------- Numbers API -------- */
 app.get('/api/numbers', async (req, res) => {
   try {
     const now = Date.now();
-    if (cachedNumberData && now - lastNumberFetch < NUMBER_CACHE) {
-      return res.json(cachedNumberData);
+    if (cachedNumbers && now - lastNumbersFetch < NUMBERS_CACHE_TIME) {
+      return res.json(cachedNumbers);
     }
 
     await ensureLoggedIn();
 
     const fdate1 = '2026-01-01 00:00:00';
-    const fdate2 = moment().tz('Asia/Karachi').format('YYYY-MM-DD 23:59:59');
+    const fdate2 = moment()
+      .tz('Asia/Karachi')
+      .format('YYYY-MM-DD 23:59:59');
 
     const params = new URLSearchParams({
       fdate1,
@@ -107,20 +114,20 @@ app.get('/api/numbers', async (req, res) => {
       responseType: 'json'
     });
 
-    cachedNumberData = r.body;
-    lastNumberFetch = now;
+    cachedNumbers = r.body;
+    lastNumbersFetch = now;
     res.json(r.body);
   } catch (e) {
     res.status(500).json({ error: 'Failed to fetch number stats' });
   }
 });
 
-/* -------- SMS API (FULLY SAFE) -------- */
+/* -------- SMS API (ANTI-CRASH) -------- */
 app.get('/api/sms', async (req, res) => {
   try {
     const now = Date.now();
     if (now - lastSmsFetch < SMS_COOLDOWN) {
-      return res.status(429).json({ error: 'Wait few seconds' });
+      return res.status(429).json({ error: 'Please wait few seconds' });
     }
     lastSmsFetch = now;
 
@@ -129,7 +136,7 @@ app.get('/api/sms', async (req, res) => {
 
     if (raw.includes('accessed this site too many times')) {
       return res.status(429).json({
-        error: 'Upstream rate limit',
+        error: 'Upstream rate limited',
         retry_after: 5
       });
     }
@@ -137,7 +144,7 @@ app.get('/api/sms', async (req, res) => {
     if (!raw.startsWith('[')) {
       return res.status(502).json({
         error: 'Upstream SMS API returned invalid JSON',
-        raw: raw.slice(0, 120)
+        raw: raw.slice(0, 150)
       });
     }
 
@@ -165,7 +172,7 @@ app.get('/api/sms', async (req, res) => {
   }
 });
 
-/* ===================== START ===================== */
+/* ================= START ================= */
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
