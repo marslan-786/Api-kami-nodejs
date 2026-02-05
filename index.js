@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 3000;
 const TARGET_HOST = 'http://51.89.99.105';
 const LOGIN_URL = `${TARGET_HOST}/NumberPanel/login`;
 const SIGNIN_URL = `${TARGET_HOST}/NumberPanel/signin`;
-const DATA_URL = `${TARGET_HOST}/NumberPanel/agent/res/data_smsnumbers.php`;
+const DATA_URL = `${TARGET_HOST}/NumberPanel/agent/res/data_smsnumbers2.php`;
 
 const SMS_API_URL =
   'http://147.135.212.197/crapi/st/viewstats?token=RVVUSkVBUzRHaothilCXX2KEa4FViFFBa5CVQWaYmGJbjVdaX2x4Vg==&dt1=2026-02-04 05:18:03&dt2=2126-05-09 05:18:16&records=10';
@@ -110,7 +110,7 @@ app.get('/api/numbers', async (_, res) => {
       `&_=${ts}`;
 
     const r = await client.get(
-      `${TARGET_HOST}/agent/res/data_smsnumbers.php?${params}`,
+      `${TARGET_HOST}/agent/res/data_smsnumbers2.php?${params}`,
       {
         headers: { Referer: `${TARGET_HOST}/agent/SMSNumbers` }
       }
