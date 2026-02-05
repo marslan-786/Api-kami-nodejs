@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 3000;
 const TARGET_HOST = 'http://51.89.99.105';
 const LOGIN_URL = `${TARGET_HOST}/NumberPanel/login`;
 const SIGNIN_URL = `${TARGET_HOST}/NumberPanel/signin`;
-const DATA_URL = `${TARGET_HOST}/NumberPanel/agent/res/data_smsnumberstats.php`;
+const DATA_URL = `${TARGET_HOST}/NumberPanel/agent/res/data_smsnumbers.php`;
 
 const SMS_API_URL =
   'http://147.135.212.197/crapi/st/viewstats?token=RVVUSkVBUzRHaothilCXX2KEa4FViFFBa5CVQWaYmGJbjVdaX2x4Vg==&dt1=2026-02-04 05:18:03&dt2=2126-05-09 05:18:16&records=10';
@@ -83,8 +83,7 @@ app.get('/', (_, res) => {
   res.send('NumberPanel Proxy Running ✅');
 });
 
-/* ===== Numbers ===== */
-
+/* ===== Numbers API ===== */
 app.get('/api/numbers', async (_, res) => {
   try {
     if (cachedNumbers && Date.now() - lastNumberFetch < NUMBER_CACHE) {
@@ -93,34 +92,46 @@ app.get('/api/numbers', async (_, res) => {
 
     await ensureLoggedIn();
 
-    const params = new URLSearchParams({
-      fdate1: '2026-01-01 00:00:00',
-      fdate2: moment().tz('Asia/Karachi').format('YYYY-MM-DD 23:59:59'),
-      iDisplayLength: -1,
-      _: Date.now()
-    });
+    const ts = Date.now();
 
-    const r = await client.get(`${DATA_URL}?${params}`, {
-      headers: { Referer: `${TARGET_HOST}/NumberPanel/agent/SMSNumberStats` }
-    });
+    const params =
+      `frange=&fclient=` +
+      `&fdate1=2026-01-01 00:00:00` +
+      `&fdate2=${moment().tz('Asia/Karachi').format('YYYY-MM-DD 23:59:59')}` +
+      `&sEcho=2&iColumns=6&sColumns=%2C%2C%2C%2C%2C` +
+      `&iDisplayStart=0&iDisplayLength=-1` +
+      `&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true` +
+      `&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=true&bSortable_1=true` +
+      `&mDataProp_2=2&sSearch_2=&bRegex_2=false&bSearchable_2=true&bSortable_2=true` +
+      `&mDataProp_3=3&sSearch_3=&bRegex_3=false&bSearchable_3=true&bSortable_3=true` +
+      `&mDataProp_4=4&sSearch_4=&bRegex_4=false&bSearchable_4=true&bSortable_4=true` +
+      `&mDataProp_5=5&sSearch_5=&bRegex_5=false&bSearchable_5=true&bSortable_5=true` +
+      `&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=asc&iSortingCols=1` +
+      `&_=${ts}`;
+
+    const r = await client.get(
+      `${TARGET_HOST}/agent/res/data_smsnumbers.php?${params}`,
+      {
+        headers: { Referer: `${TARGET_HOST}/agent/SMSNumbers` }
+      }
+    );
 
     cachedNumbers = JSON.parse(r.body);
     lastNumberFetch = Date.now();
 
     res.json(cachedNumbers);
   } catch (e) {
+    console.error('Numbers fetch error:', e.message);
     if (cachedNumbers) return res.json(cachedNumbers);
     res.status(500).json({ error: 'Failed to fetch number stats' });
   }
 });
 
-/* ===== SMS ===== */
-
+/* ===== SMS API (unchanged) ===== */
 app.get('/api/sms', async (_, res) => {
   try {
     const now = Date.now();
 
-    // 🔒 cooldown → cached
     if (cachedSms && now - lastSmsFetch < SMS_COOLDOWN) {
       return res.json(cachedSms);
     }
@@ -130,7 +141,6 @@ app.get('/api/sms', async (_, res) => {
     const r = await got.get(SMS_API_URL, { timeout: 20000 });
     const raw = r.body.toString().trim();
 
-    // 🛑 upstream block
     if (
       raw.includes('accessed this site too many times') ||
       raw.includes('Please wait')
@@ -176,7 +186,7 @@ app.get('/api/sms', async (_, res) => {
   }
 });
 
-/* ================= START ================= */
+/* ================= START SERVER ================= */
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Server running on port ${PORT}`);
