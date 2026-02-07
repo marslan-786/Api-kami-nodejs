@@ -23,7 +23,7 @@ const TARGET_HOST = 'http://51.89.99.105';
 const LOGIN_URL = `${TARGET_HOST}/NumberPanel/login`;
 const SIGNIN_URL = `${TARGET_HOST}/NumberPanel/signin`;
 const DATA_URL = `${TARGET_HOST}/NumberPanel/agent/res/data_smsnumberstats.php`;
-const SMS_API_URL = 'http://147.135.212.197/crapi/st/viewstats?token=RVVUSkVBUzRHaothilCXX2KEa4FViFFBa5CVQWaYmGJbjVdaX2x4Vg==&records=100';
+const SMS_API_URL = 'http://147.135.212.197/crapi/st/viewstats?token=RVVUSkVBUzRHaothilCXX2KEa4FViFFBa5CVQWaYmGJbjVdaX2x4Vg==&records=50';
 
 const USERNAME = process.env.PANEL_USER || 'Kami526';
 const PASSWORD = process.env.PANEL_PASS || 'Kamran52';
@@ -50,10 +50,10 @@ function getCountryFromNumber(number) {
     }
 }
 
-// **Message Fix Function** (صرف یہ نیا ہے SMS API میں)
+// SMS Message Fixer
 function fixSmsMessage(msg) {
     if (!msg) return "";
-    // اگر نمبر کے بعد 'n' آئے تو اسے سپیس بنا دو
+    // Logic: 0-9 k baad agar 'n' aye to Space laga do
     let fixedMsg = msg.replace(/(\d)n/g, '$1 ');
     fixedMsg = fixedMsg.replace(/\n/g, ' ');
     return fixedMsg;
@@ -83,7 +83,7 @@ app.get('/', (req, res) => {
     res.send('Number Panel Proxy is Running!');
 });
 
-// 1. Numbers API (Clean Structure - As requested previously)
+// 1. Numbers API (Updated to Kenya Structure)
 app.get('/api/numbers', async (req, res) => {
     try {
         const currentTime = Date.now();
@@ -108,26 +108,24 @@ app.get('/api/numbers', async (req, res) => {
 
         const rawData = response.body;
 
-        // **TRANSFORMATION FOR NUMBERS API** (Cleaning the garbage)
+        // **TRANSFORMATION FOR NUMBERS API** (Matches Kenya JSON Structure)
         if (rawData.aaData && Array.isArray(rawData.aaData)) {
             rawData.aaData = rawData.aaData.map(item => {
-                let id = "0";
-                const idMatch = item[0] ? item[0].match(/(\d+)/) : null;
-                if (idMatch) id = idMatch[1];
-
-                const countryName = getCountryFromNumber(item[2]);
-                const checkboxHtml = `<input type='checkbox' class='checkbox' name='allid[]' value='${id}' />`;
-                const priceHtml = `${item[3]}<br />${item[4]}`;
-                const allocateHtml = `<a href='#allocatem' title='Allocate' data-toggle='modal' id='allocate' info='${id}' class='fa fa-edit'></a>`;
-
+                // Raw Input: ["584269902694", "1", "$", 0.01, 0]
+                
+                const number = item[0];
+                const countryName = getCountryFromNumber(number);
+                const currency = item[2];
+                const price = item[3];
+                
+                // Constructing 6 Columns
                 return [
-                    checkboxHtml,    // 0: Checkbox
-                    countryName,     // 1: Country Name
-                    item[2],         // 2: Phone Number
-                    priceHtml,       // 3: Price Info
-                    allocateHtml,    // 4: Allocate Link
-                    "",              // 5: Empty String
-                    item[5]          // 6: Action Buttons
+                    countryName,                            // 0: Name/Country
+                    "",                                     // 1: Empty (Hidden ID)
+                    number,                                 // 2: Phone Number
+                    "OTP",                                  // 3: Period/Type (Hardcoded as OTP)
+                    `${currency} ${price}`,                 // 4: Price (e.g. $ 0.01)
+                    "SD : <b>0</b> | SW : <b>0</b> "        // 5: Actions (Hardcoded Visuals)
                 ];
             });
         }
@@ -142,20 +140,28 @@ app.get('/api/numbers', async (req, res) => {
     }
 });
 
-// 2. SMS API (Reverted to Original Order + Fix)
+// 2. SMS API (Original Structure + Message Fix)
 app.get('/api/sms', async (req, res) => {
     try {
-        const response = await got.get(SMS_API_URL, { responseType: 'json' });
+        // Simple Error Handling added here
+        let response;
+        try {
+            response = await got.get(SMS_API_URL, { responseType: 'json' });
+        } catch (err) {
+            console.error("SMS API Error (External):", err.message);
+            // Return empty structure if external API fails (to prevent crash)
+            return res.json({ "sEcho": 1, "iTotalRecords": 0, "iTotalDisplayRecords": 0, "aaData": [] });
+        }
+
         const rawData = response.body;
 
         const formattedData = rawData.map(item => {
-            // **FIX APPLIED HERE ONLY**
             const cleanMessage = fixSmsMessage(item[2]);
             const country = getCountryFromNumber(item[1]);
 
             // **Original Order:** Date -> Country -> Phone -> Service -> Message...
             return [
-                item[3],        // 0. Date (Original Position)
+                item[3],        // 0. Date
                 country,        // 1. Country
                 item[1],        // 2. Phone
                 item[0],        // 3. Service
@@ -176,7 +182,7 @@ app.get('/api/sms', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error fetching SMS:', error.message);
+        console.error('Error fetching SMS logic:', error.message);
         res.status(500).json({ error: 'Failed to fetch SMS data' });
     }
 });
