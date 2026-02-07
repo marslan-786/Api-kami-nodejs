@@ -1,5 +1,5 @@
 const express = require('express');
-const got = require('got');
+const got = require('got'); 
 const { CookieJar } = require('tough-cookie');
 const cheerio = require('cheerio');
 const moment = require('moment-timezone');
@@ -8,196 +8,179 @@ const { parsePhoneNumber } = require('libphonenumber-js');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* ================= CONFIG ================= */
+const cookieJar = new CookieJar();
+const client = got.extend({
+    cookieJar,
+    headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36'
+    },
+    retry: {
+        limit: 2 
+    }
+});
 
 const TARGET_HOST = 'http://51.89.99.105';
 const LOGIN_URL = `${TARGET_HOST}/NumberPanel/login`;
 const SIGNIN_URL = `${TARGET_HOST}/NumberPanel/signin`;
-const NUMBERS2_URL = `${TARGET_HOST}/NumberPanel/agent/res/data_smsnumbers2.php`;
-const SMS_API_URL =
-  'http://147.135.212.197/crapi/st/viewstats?token=RVVUSkVBUzRHaothilCXX2KEa4FViFFBa5CVQWaYmGJbjVdaX2x4Vg==&dt1=2026-02-04 05:18:03&dt2=2126-05-09 05:18:16&records=10';
+const DATA_URL = `${TARGET_HOST}/NumberPanel/agent/res/data_smsnumberstats.php`;
+const SMS_API_URL = 'http://147.135.212.197/crapi/st/viewstats?token=RVZUQ0pBUzR5d3NZgYuPiEN0hkRoYpVXiE6BVnJRiVtIlohqU4hmaw==&records=100';
 
 const USERNAME = process.env.PANEL_USER || 'Kami526';
 const PASSWORD = process.env.PANEL_PASS || 'Kamran52';
 
-/* ================= CLIENT ================= */
+let cachedNumberData = null;
+let lastFetchTime = 0;
+const CACHE_DURATION = 5 * 60 * 1000; 
 
-const cookieJar = new CookieJar();
-
-const client = got.extend({
-  cookieJar,
-  timeout: 20000,
-  headers: {
-    'User-Agent':
-      'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/144 Mobile Safari/537.36',
-    'X-Requested-With': 'XMLHttpRequest'
-  },
-  retry: { limit: 2 }
-});
-
-/* ================= CACHE ================= */
-
-let cachedNumbers = null;
-let cachedSms = null;
-
-let lastNumberFetch = 0;
-let lastSmsFetch = 0;
-
-const NUMBER_CACHE = 5 * 60 * 1000; // 5 min
-const SMS_COOLDOWN = 5000; // 5 sec
-
-/* ================= HELPERS ================= */
+// --- Helper Functions ---
 
 function getCountryFromNumber(number) {
-  try {
-    const num = number.toString().startsWith('+') ? number : '+' + number;
-    const phone = parsePhoneNumber(num);
-    if (!phone || !phone.country) return 'International';
-    return new Intl.DisplayNames(['en'], { type: 'region' }).of(phone.country);
-  } catch {
-    return 'Unknown';
-  }
+    if (!number) return "International";
+    try {
+        const strNum = number.toString().startsWith('+') ? number.toString() : '+' + number.toString();
+        const phoneNumber = parsePhoneNumber(strNum);
+
+        if (phoneNumber && phoneNumber.country) {
+            const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+            return regionNames.of(phoneNumber.country);
+        }
+        return "International";
+    } catch (error) {
+        return "International";
+    }
+}
+
+// **Message Fix Function** (صرف یہ نیا ہے SMS API میں)
+function fixSmsMessage(msg) {
+    if (!msg) return "";
+    // اگر نمبر کے بعد 'n' آئے تو اسے سپیس بنا دو
+    let fixedMsg = msg.replace(/(\d)n/g, '$1 ');
+    fixedMsg = fixedMsg.replace(/\n/g, ' ');
+    return fixedMsg;
 }
 
 async function ensureLoggedIn() {
-  try {
-    const loginPage = await client.get(LOGIN_URL);
-    const $ = cheerio.load(loginPage.body);
+    try {
+        const loginPage = await client.get(LOGIN_URL);
+        const $ = cheerio.load(loginPage.body);
+        const labelText = $('label:contains("What is")').text();
+        const match = labelText.match(/(\d+)\s*\+\s*(\d+)/);
+        let captchaAnswer = 0;
+        if (match) captchaAnswer = parseInt(match[1]) + parseInt(match[2]);
 
-    const captcha = $('label:contains("What is")').text();
-    let captAnswer = '';
-    const m = captcha.match(/(\d+)\s*\+\s*(\d+)/);
-    if (m) {
-      captAnswer = (parseInt(m[1]) + parseInt(m[2])).toString();
+        await client.post(SIGNIN_URL, {
+            form: { username: USERNAME, password: PASSWORD, capt: captchaAnswer },
+            headers: { 'Referer': LOGIN_URL }
+        });
+    } catch (error) {
+        console.error('Login Failed:', error.message);
     }
-
-    await client.post(SIGNIN_URL, {
-      form: {
-        username: USERNAME,
-        password: PASSWORD,
-        capt: captAnswer
-      },
-      headers: { Referer: LOGIN_URL }
-    });
-
-    console.log('✅ Logged in to panel');
-  } catch (e) {
-    console.error('❌ Login error', e.message);
-  }
 }
 
-/* ================= ROUTES ================= */
+// --- Routes ---
 
-app.get('/', (_, res) => {
-  res.send('Number Panel Proxy Running 🚀');
+app.get('/', (req, res) => {
+    res.send('Number Panel Proxy is Running!');
 });
 
-/* ===== Numbers API ===== */
-app.get('/api/numbers', async (_, res) => {
-  try {
-    if (!cachedNumbers || Date.now() - lastNumberFetch > NUMBER_CACHE) {
-      await ensureLoggedIn();
-
-      const params = new URLSearchParams({
-        frange: '',
-        fclient: '',
-        fallocated: '',
-        sEcho: 2,
-        iColumns: 8,
-        sColumns: ',,,,,,,',
-        iDisplayStart: 0,
-        iDisplayLength: -1,
-        iSortCol_0: 0,
-        sSortDir_0: 'asc',
-        iSortingCols: 1,
-        _: Date.now()
-      });
-
-      const r = await client.get(`${NUMBERS2_URL}?${params.toString()}`, {
-        responseType: 'json',
-        headers: {
-          Referer: `${TARGET_HOST}/NumberPanel/agent/MySMSNumbers2`
+// 1. Numbers API (Clean Structure - As requested previously)
+app.get('/api/numbers', async (req, res) => {
+    try {
+        const currentTime = Date.now();
+        if (cachedNumberData && (currentTime - lastFetchTime < CACHE_DURATION)) {
+            return res.json(cachedNumberData);
         }
-      });
 
-      cachedNumbers = r.body;
-      lastNumberFetch = Date.now();
+        await ensureLoggedIn();
+
+        const fdate1 = '2026-01-01 00:00:00';
+        const fdate2 = moment().tz("Asia/Karachi").format('YYYY-MM-DD 23:59:59');
+
+        const searchParams = new URLSearchParams({
+            fdate1: fdate1, fdate2: fdate2, sEcho: 4, iColumns: 5, sColumns: ',,,,',
+            iDisplayStart: 0, iDisplayLength: -1, sSearch: '', bRegex: false, iSortCol_0: 0, sSortDir_0: 'desc', iSortingCols: 1, _: Date.now()
+        });
+
+        const response = await client.get(`${DATA_URL}?${searchParams.toString()}`, {
+            headers: { 'Referer': `${TARGET_HOST}/NumberPanel/agent/SMSNumberStats`, 'X-Requested-With': 'XMLHttpRequest' },
+            responseType: 'json' 
+        });
+
+        const rawData = response.body;
+
+        // **TRANSFORMATION FOR NUMBERS API** (Cleaning the garbage)
+        if (rawData.aaData && Array.isArray(rawData.aaData)) {
+            rawData.aaData = rawData.aaData.map(item => {
+                let id = "0";
+                const idMatch = item[0] ? item[0].match(/(\d+)/) : null;
+                if (idMatch) id = idMatch[1];
+
+                const countryName = getCountryFromNumber(item[2]);
+                const checkboxHtml = `<input type='checkbox' class='checkbox' name='allid[]' value='${id}' />`;
+                const priceHtml = `${item[3]}<br />${item[4]}`;
+                const allocateHtml = `<a href='#allocatem' title='Allocate' data-toggle='modal' id='allocate' info='${id}' class='fa fa-edit'></a>`;
+
+                return [
+                    checkboxHtml,    // 0: Checkbox
+                    countryName,     // 1: Country Name
+                    item[2],         // 2: Phone Number
+                    priceHtml,       // 3: Price Info
+                    allocateHtml,    // 4: Allocate Link
+                    "",              // 5: Empty String
+                    item[5]          // 6: Action Buttons
+                ];
+            });
+        }
+
+        cachedNumberData = rawData;
+        lastFetchTime = currentTime;
+        res.json(cachedNumberData);
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Failed' });
     }
-
-    res.json(cachedNumbers);
-  } catch (e) {
-    console.error('❌ Numbers error:', e.message);
-    if (cachedNumbers) res.json(cachedNumbers);
-    else res.status(500).json({ error: 'Failed to fetch numbers' });
-  }
 });
 
-/* ===== SMS API ===== */
-app.get('/api/sms', async (_, res) => {
-  try {
-    const now = Date.now();
-    if (cachedSms && now - lastSmsFetch < SMS_COOLDOWN) {
-      return res.json(cachedSms);
+// 2. SMS API (Reverted to Original Order + Fix)
+app.get('/api/sms', async (req, res) => {
+    try {
+        const response = await got.get(SMS_API_URL, { responseType: 'json' });
+        const rawData = response.body;
+
+        const formattedData = rawData.map(item => {
+            // **FIX APPLIED HERE ONLY**
+            const cleanMessage = fixSmsMessage(item[2]);
+            const country = getCountryFromNumber(item[1]);
+
+            // **Original Order:** Date -> Country -> Phone -> Service -> Message...
+            return [
+                item[3],        // 0. Date (Original Position)
+                country,        // 1. Country
+                item[1],        // 2. Phone
+                item[0],        // 3. Service
+                cleanMessage,   // 4. Message (Fixed 'n' issue)
+                "$",            // 5. Currency
+                "0.005",        // 6. Price
+                ""              // 7. Extra
+            ];
+        });
+
+        formattedData.push([ "0,0.05,0,0,0,0,0,0.05,0,0,100%,0,9", 0, 0, 0, "", "$", 0, 0 ]);
+
+        res.json({
+            "sEcho": 1,
+            "iTotalRecords": formattedData.length.toString(),
+            "iTotalDisplayRecords": formattedData.length.toString(),
+            "aaData": formattedData
+        });
+
+    } catch (error) {
+        console.error('Error fetching SMS:', error.message);
+        res.status(500).json({ error: 'Failed to fetch SMS data' });
     }
-
-    lastSmsFetch = now;
-
-    const r = await got.get(SMS_API_URL, { timeout: 20000 });
-    const raw = r.body.toString().trim();
-
-    if (
-      raw.includes('Please wait') ||
-      raw.includes('accessed this site too many times')
-    ) {
-      if (cachedSms) return res.json(cachedSms);
-      return res.json({
-        sEcho: 1,
-        iTotalRecords: 0,
-        iTotalDisplayRecords: 0,
-        aaData: []
-      });
-    }
-
-    if (!raw.startsWith('[')) {
-      if (cachedSms) return res.json(cachedSms);
-      throw new Error('Invalid JSON');
-    }
-
-    const data = JSON.parse(raw);
-
-    const aaData = data.map(i => {
-  let country = 'Unknown';
-  if (i[1] && /^\d+$/.test(i[1])) {
-    country = getCountryFromNumber(i[1]);
-  }
-
-  return [
-    i[3],       // Service / Sender
-    country,    // Country Name
-    i[1],       // Number
-    i[0],       // Service Type or label
-    i[2],       // Full Message
-    '$',        // Currency
-    '0'         // Cost
-  ];
 });
 
-    cachedSms = {
-      sEcho: 1,
-      iTotalRecords: aaData.length,
-      iTotalDisplayRecords: aaData.length,
-      aaData
-    };
-
-    res.json(cachedSms);
-  } catch (e) {
-    console.error('❌ SMS error:', e.message);
-    if (cachedSms) return res.json(cachedSms);
-    res.status(500).json({ error: 'Failed to fetch SMS data' });
-  }
-});
-
-/* ================= START ================= */
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server listening on port ${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
