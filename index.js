@@ -24,16 +24,21 @@ const LOGIN_URL = `${TARGET_HOST}/NumberPanel/login`;
 const SIGNIN_URL = `${TARGET_HOST}/NumberPanel/signin`;
 const DATA_URL = `${TARGET_HOST}/NumberPanel/agent/res/data_smsnumberstats.php`;
 
-// **Updated SMS URL with New Token**
+// SMS API URL
 const SMS_API_URL = 'http://147.135.212.197/crapi/st/viewstats?token=RVVUSkVBUzRHaothilCXX2KEa4FViFFBa5CVQWaYmGJbjVdaX2x4Vg==&records=100';
 
-// **Updated Credentials**
+// Credentials
 const USERNAME = process.env.PANEL_USER || 'Kami526';
 const PASSWORD = process.env.PANEL_PASS || 'Kamran52';
 
-let cachedNumberData = null;
-let lastFetchTime = 0;
-const CACHE_DURATION = 5 * 60 * 1000; 
+// --- CACHING VARIABLES (Global Memory) ---
+let numbersCache = null;
+let numbersLastFetch = 0;
+const NUMBERS_CACHE_TIME = 5 * 60 * 1000; // 5 Minutes
+
+let smsCache = null;         // SMS ڈیٹا یہاں سٹور ہوگا
+let smsLastFetch = 0;        // آخری بار کب اپڈیٹ ہوا
+const SMS_CACHE_TIME = 5000; // 5 Seconds (Strict Lock)
 
 // --- Helper Functions ---
 
@@ -81,17 +86,22 @@ async function ensureLoggedIn() {
 // --- Routes ---
 
 app.get('/', (req, res) => {
-    res.send('Number Panel Proxy is Running!');
+    res.send('Number Panel Proxy is Running with Anti-Spam Cache!');
 });
 
-// 1. Numbers API (Kenya Structure - Fixed)
+// 1. Numbers API (5 Minute Cache Logic)
 app.get('/api/numbers', async (req, res) => {
     try {
         const currentTime = Date.now();
-        if (cachedNumberData && (currentTime - lastFetchTime < CACHE_DURATION)) {
-            return res.json(cachedNumberData);
+
+        // ** Strict 5 Minute Lock **
+        // اگر ڈیٹا موجود ہے اور 5 منٹ نہیں گزرے تو پرانا ڈیٹا بھیج دو
+        if (numbersCache && (currentTime - numbersLastFetch < NUMBERS_CACHE_TIME)) {
+            // console.log('Serving Numbers from Cache (No Upstream Hit)');
+            return res.json(numbersCache);
         }
 
+        // اگر 5 منٹ گزر گئے تو نیا ڈیٹا لاؤ
         await ensureLoggedIn();
 
         const fdate1 = '2026-01-01 00:00:00';
@@ -109,6 +119,7 @@ app.get('/api/numbers', async (req, res) => {
 
         const rawData = response.body;
 
+        // Transformation
         if (rawData.aaData && Array.isArray(rawData.aaData)) {
             rawData.aaData = rawData.aaData.map(item => {
                 const number = item[0];
@@ -117,47 +128,62 @@ app.get('/api/numbers', async (req, res) => {
                 const price = item[3];
                 
                 return [
-                    countryName,                            // 0: Name/Country
-                    "",                                     // 1: Empty
-                    number,                                 // 2: Phone Number
-                    "OTP",                                  // 3: Period/Type
-                    `${currency} ${price}`,                 // 4: Price
-                    "SD : <b>0</b> | SW : <b>0</b> "        // 5: Actions
+                    countryName,                            // 0
+                    "",                                     // 1
+                    number,                                 // 2
+                    "OTP",                                  // 3
+                    `${currency} ${price}`,                 // 4
+                    "SD : <b>0</b> | SW : <b>0</b> "        // 5
                 ];
             });
         }
 
-        cachedNumberData = rawData;
-        lastFetchTime = currentTime;
-        res.json(cachedNumberData);
+        // Cache Update
+        numbersCache = rawData;
+        numbersLastFetch = currentTime;
+        
+        res.json(numbersCache);
 
     } catch (error) {
-        console.error(error);
+        console.error('Numbers API Error:', error.message);
+        // اگر ایرر آئے تو کوشش کرو کہ پرانا کیش ہی بھیج دو تاکہ ایپ کریش نہ ہو
+        if (numbersCache) return res.json(numbersCache);
         res.status(500).json({ error: 'Failed' });
     }
 });
 
-// 2. SMS API (New Token + Fallback)
+// 2. SMS API (5 Second Cache Logic)
 app.get('/api/sms', async (req, res) => {
     try {
-        // Raw Response حاصل کریں (بغیر JSON Parse کیے)
+        const currentTime = Date.now();
+
+        // ** Strict 5 Second Lock **
+        // اگر ڈیٹا موجود ہے اور 5 سیکنڈ نہیں گزرے تو فورا پرانا ڈیٹا بھیجو
+        // پیچھے ریکویسٹ بھیجنے کی ضرورت ہی نہیں
+        if (smsCache && (currentTime - smsLastFetch < SMS_CACHE_TIME)) {
+            // console.log('Serving SMS from Cache (Saving Spam)');
+            return res.json(smsCache);
+        }
+
+        // اگر 5 سیکنڈ گزر گئے، تبھی نئی ریکویسٹ بھیجو
         const response = await got.get(SMS_API_URL, { responseType: 'text' });
         
         let rawData;
         try {
             rawData = JSON.parse(response.body);
         } catch (e) {
-            // اگر JSON نہیں ہے (مطلب HTML Error ہے)، تو Raw Response بھیج دو
-            console.error("Upstream API returned non-JSON:", response.body);
+            console.error("Non-JSON Response from SMS API");
+            // اگر JSON خراب ہے اور ہمارے پاس پرانا Cache ہے، تو وہی بھیج دو
+            if (smsCache) return res.json(smsCache);
             return res.send(response.body);
         }
 
-        // اگر JSON مل گیا لیکن ڈیٹا Array نہیں ہے، تو بھی جیسا ہے ویسا بھیج دو
         if (!Array.isArray(rawData)) {
+            if (smsCache) return res.json(smsCache);
             return res.json(rawData);
         }
 
-        // اگر سب ٹھیک ہے تو فارمیٹنگ کرو
+        // Formatting
         const formattedData = rawData.map(item => {
             const cleanMessage = fixSmsMessage(item[2]);
             const country = getCountryFromNumber(item[1]);
@@ -174,19 +200,26 @@ app.get('/api/sms', async (req, res) => {
             ];
         });
 
-        // Footer Row
+        // Footer
         formattedData.push([ "0,0.05,0,0,0,0,0,0.05,0,0,100%,0,9", 0, 0, 0, "", "$", 0, 0 ]);
 
-        res.json({
+        const finalResponse = {
             "sEcho": 1,
             "iTotalRecords": formattedData.length.toString(),
             "iTotalDisplayRecords": formattedData.length.toString(),
             "aaData": formattedData
-        });
+        };
+
+        // Cache Update
+        smsCache = finalResponse;
+        smsLastFetch = currentTime;
+
+        res.json(smsCache);
 
     } catch (error) {
-        console.error('Error fetching SMS logic:', error.message);
-        // Fallback: کچھ نہ ملے تو خالی JSON
+        console.error('SMS API Logic Error:', error.message);
+        // Fallback: اگر ایرر آئے تو پرانا ڈیٹا زندہ باد
+        if (smsCache) return res.json(smsCache);
         res.status(500).json({ "sEcho": 1, "iTotalRecords": 0, "iTotalDisplayRecords": 0, "aaData": [] });
     }
 });
