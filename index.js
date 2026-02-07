@@ -23,8 +23,11 @@ const TARGET_HOST = 'http://51.89.99.105';
 const LOGIN_URL = `${TARGET_HOST}/NumberPanel/login`;
 const SIGNIN_URL = `${TARGET_HOST}/NumberPanel/signin`;
 const DATA_URL = `${TARGET_HOST}/NumberPanel/agent/res/data_smsnumberstats.php`;
-const SMS_API_URL = 'http://147.135.212.197/crapi/st/viewstats?token=RVVUSkVBUzRHaothilCXX2KEa4FViFFBa5CVQWaYmGJbjVdaX2x4Vg==&records=50';
 
+// **Updated SMS URL with New Token**
+const SMS_API_URL = 'http://147.135.212.197/crapi/st/viewstats?token=RVVUSkVBUzRHaothilCXX2KEa4FViFFBa5CVQWaYmGJbjVdaX2x4Vg==&records=100';
+
+// **Updated Credentials**
 const USERNAME = process.env.PANEL_USER || 'Kami526';
 const PASSWORD = process.env.PANEL_PASS || 'Kamran52';
 
@@ -50,10 +53,8 @@ function getCountryFromNumber(number) {
     }
 }
 
-// SMS Message Fixer
 function fixSmsMessage(msg) {
     if (!msg) return "";
-    // Logic: 0-9 k baad agar 'n' aye to Space laga do
     let fixedMsg = msg.replace(/(\d)n/g, '$1 ');
     fixedMsg = fixedMsg.replace(/\n/g, ' ');
     return fixedMsg;
@@ -83,7 +84,7 @@ app.get('/', (req, res) => {
     res.send('Number Panel Proxy is Running!');
 });
 
-// 1. Numbers API (Updated to Kenya Structure)
+// 1. Numbers API (Kenya Structure - Fixed)
 app.get('/api/numbers', async (req, res) => {
     try {
         const currentTime = Date.now();
@@ -108,24 +109,20 @@ app.get('/api/numbers', async (req, res) => {
 
         const rawData = response.body;
 
-        // **TRANSFORMATION FOR NUMBERS API** (Matches Kenya JSON Structure)
         if (rawData.aaData && Array.isArray(rawData.aaData)) {
             rawData.aaData = rawData.aaData.map(item => {
-                // Raw Input: ["584269902694", "1", "$", 0.01, 0]
-                
                 const number = item[0];
                 const countryName = getCountryFromNumber(number);
                 const currency = item[2];
                 const price = item[3];
                 
-                // Constructing 6 Columns
                 return [
                     countryName,                            // 0: Name/Country
-                    "",                                     // 1: Empty (Hidden ID)
+                    "",                                     // 1: Empty
                     number,                                 // 2: Phone Number
-                    "OTP",                                  // 3: Period/Type (Hardcoded as OTP)
-                    `${currency} ${price}`,                 // 4: Price (e.g. $ 0.01)
-                    "SD : <b>0</b> | SW : <b>0</b> "        // 5: Actions (Hardcoded Visuals)
+                    "OTP",                                  // 3: Period/Type
+                    `${currency} ${price}`,                 // 4: Price
+                    "SD : <b>0</b> | SW : <b>0</b> "        // 5: Actions
                 ];
             });
         }
@@ -140,38 +137,44 @@ app.get('/api/numbers', async (req, res) => {
     }
 });
 
-// 2. SMS API (Original Structure + Message Fix)
+// 2. SMS API (New Token + Fallback)
 app.get('/api/sms', async (req, res) => {
     try {
-        // Simple Error Handling added here
-        let response;
+        // Raw Response حاصل کریں (بغیر JSON Parse کیے)
+        const response = await got.get(SMS_API_URL, { responseType: 'text' });
+        
+        let rawData;
         try {
-            response = await got.get(SMS_API_URL, { responseType: 'json' });
-        } catch (err) {
-            console.error("SMS API Error (External):", err.message);
-            // Return empty structure if external API fails (to prevent crash)
-            return res.json({ "sEcho": 1, "iTotalRecords": 0, "iTotalDisplayRecords": 0, "aaData": [] });
+            rawData = JSON.parse(response.body);
+        } catch (e) {
+            // اگر JSON نہیں ہے (مطلب HTML Error ہے)، تو Raw Response بھیج دو
+            console.error("Upstream API returned non-JSON:", response.body);
+            return res.send(response.body);
         }
 
-        const rawData = response.body;
+        // اگر JSON مل گیا لیکن ڈیٹا Array نہیں ہے، تو بھی جیسا ہے ویسا بھیج دو
+        if (!Array.isArray(rawData)) {
+            return res.json(rawData);
+        }
 
+        // اگر سب ٹھیک ہے تو فارمیٹنگ کرو
         const formattedData = rawData.map(item => {
             const cleanMessage = fixSmsMessage(item[2]);
             const country = getCountryFromNumber(item[1]);
 
-            // **Original Order:** Date -> Country -> Phone -> Service -> Message...
             return [
                 item[3],        // 0. Date
                 country,        // 1. Country
                 item[1],        // 2. Phone
                 item[0],        // 3. Service
-                cleanMessage,   // 4. Message (Fixed 'n' issue)
+                cleanMessage,   // 4. Message
                 "$",            // 5. Currency
                 "0.005",        // 6. Price
                 ""              // 7. Extra
             ];
         });
 
+        // Footer Row
         formattedData.push([ "0,0.05,0,0,0,0,0,0.05,0,0,100%,0,9", 0, 0, 0, "", "$", 0, 0 ]);
 
         res.json({
@@ -183,7 +186,8 @@ app.get('/api/sms', async (req, res) => {
 
     } catch (error) {
         console.error('Error fetching SMS logic:', error.message);
-        res.status(500).json({ error: 'Failed to fetch SMS data' });
+        // Fallback: کچھ نہ ملے تو خالی JSON
+        res.status(500).json({ "sEcho": 1, "iTotalRecords": 0, "iTotalDisplayRecords": 0, "aaData": [] });
     }
 });
 
