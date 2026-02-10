@@ -104,7 +104,7 @@ app.get('/api/numbers', async (req, res) => {
         // اگر 5 منٹ گزر گئے تو نیا ڈیٹا لاؤ
         await ensureLoggedIn();
 
-        const fdate1 = '2026-01-01 00:00:00';
+        const fdate1 = '2026-02-10 00:00:00';
         const fdate2 = moment().tz("Asia/Karachi").format('YYYY-MM-DD 23:59:59');
 
         const searchParams = new URLSearchParams({
