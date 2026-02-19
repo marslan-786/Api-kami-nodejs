@@ -134,7 +134,7 @@ async function performLogin() {
 // --- 2. AUTO REFRESH (Keep Session Alive) ---
 setInterval(() => {
     performLogin();
-}, 120000); // Har 5 minute baad refresh
+}, 120000); // Har 2 minute baad refresh
 
 // --- 3. OUR API ENDPOINT ---
 app.get('/api', async (req, res) => {
