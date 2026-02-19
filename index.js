@@ -4,194 +4,148 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// --- CONFIGURATION (CLIENT) ---
 const CREDENTIALS = {
-    username: "Kami522", // Client Username
-    password: "Kami526"  // Client Password
+    username: "Kami555",
+    password: "Kami526"
 };
 
 const BASE_URL = "http://51.89.99.105/NumberPanel";
 const STATS_PAGE_URL = `${BASE_URL}/client/SMSCDRStats`;
 
 const COMMON_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Mobile Safari/537.36",
-    "X-Requested-With": "XMLHttpRequest",
-    "Origin": "http://51.89.99.105",
-    "Accept-Language": "en-US,en;q=0.9,ur-PK;q=0.8,ur;q=0.7"
+    "User-Agent": "Mozilla/5.0 (Linux; Android)",
+    "X-Requested-With": "XMLHttpRequest"
 };
 
-// --- GLOBAL STATE ---
 let STATE = {
     cookie: null,
     sessKey: null,
     isLoggingIn: false
 };
 
-// --- HELPER: GET CURRENT DATE ---
-function getTodayDate() {
-    const d = new Date();
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-}
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
 
-// --- HELPER: FIND KEY IN HTML ---
 function extractKey(html) {
-    let match = html.match(/sesskey=([^&"']+)/);
-    if (match) return match[1];
-    match = html.match(/sesskey\s*[:=]\s*["']([^"']+)["']/);
-    if (match) return match[1];
+    let m = html.match(/sesskey=([^&"']+)/);
+    if (m) return m[1];
     return null;
 }
 
-// --- LOGIN & FETCH SESSKEY ---
 async function performLogin() {
     if (STATE.isLoggingIn) return;
     STATE.isLoggingIn = true;
-    
-    console.log("🔄 Starting Client Login...");
 
     try {
-        const instance = axios.create({ 
-            withCredentials: true, 
-            headers: COMMON_HEADERS,
-            timeout: 15000
-        });
+        console.log("🔄 Logging in...");
 
-        // Login page fetch
-        const r1 = await instance.get(`${BASE_URL}/login`);
-        let tempCookie = "";
-        if (r1.headers['set-cookie']) {
-            const c = r1.headers['set-cookie'].find(x => x.includes('PHPSESSID'));
-            if (c) tempCookie = c.split(';')[0];
-        }
+        const r1 = await axios.get(`${BASE_URL}/login`, { headers: COMMON_HEADERS });
 
-        // Solve Captcha
-        const match = r1.data.match(/What is (\d+) \+ (\d+) = \?/);
-        const ans = match ? parseInt(match[1]) + parseInt(match[2]) : 10;
+        const cookie = r1.headers['set-cookie']
+            ?.find(c => c.includes("PHPSESSID"))
+            ?.split(';')[0];
 
-        // Post Login
+        STATE.cookie = cookie;
+
+        const match = r1.data.match(/What is (\d+) \+ (\d+)/);
+        const ans = match ? Number(match[1]) + Number(match[2]) : 10;
+
         const params = new URLSearchParams();
         params.append('username', CREDENTIALS.username);
         params.append('password', CREDENTIALS.password);
         params.append('capt', ans);
 
-        const r2 = await instance.post(`${BASE_URL}/signin`, params, {
+        await axios.post(`${BASE_URL}/signin`, params, {
             headers: {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Cookie": tempCookie,
-                "Referer": `${BASE_URL}/login`
-            },
-            maxRedirects: 0,
-            validateStatus: () => true
-        });
-
-        // Save cookie
-        if (r2.headers['set-cookie']) {
-            const newC = r2.headers['set-cookie'].find(x => x.includes('PHPSESSID'));
-            STATE.cookie = newC ? newC.split(';')[0] : tempCookie;
-        } else {
-            STATE.cookie = tempCookie;
-        }
-
-        console.log("✅ Client Login Success. Cookie:", STATE.cookie);
-
-        // GET SESSKEY
-        const r3 = await axios.get(STATS_PAGE_URL, {
-            headers: { 
-                ...COMMON_HEADERS, 
-                "Cookie": STATE.cookie,
-                "Referer": `${BASE_URL}/client/SMSDashboard`
+                ...COMMON_HEADERS,
+                Cookie: STATE.cookie,
+                "Content-Type": "application/x-www-form-urlencoded"
             }
         });
 
-        const foundKey = extractKey(r3.data);
-        STATE.sessKey = foundKey || null;
-
-        if (foundKey) console.log("🔥 SessKey FOUND:", STATE.sessKey);
-        else console.log("❌ SessKey NOT found in HTML.");
-
-    } catch (e) {
-        console.error("❌ Login Failed:", e.message);
-    } finally {
-        STATE.isLoggingIn = false;
-    }
-}
-
-// --- AUTO REFRESH EVERY 2 MIN ---
-setInterval(() => {
-    performLogin();
-}, 120000); // 2 minutes
-
-// --- API ENDPOINT ---
-app.get('/api', async (req, res) => {
-    const { type } = req.query;
-    if (!STATE.cookie || !STATE.sessKey) {
-        await performLogin();
-        if (!STATE.sessKey) return res.status(500).json({error: "Waiting for login..."});
-    }
-
-    const ts = Date.now();
-    const today = getTodayDate();
-    let targetUrl = "";
-    let specificReferer = "";
-
-    if (type === 'numbers') {
-        specificReferer = `${BASE_URL}/client/MySMSNumbers`;
-        targetUrl = `${BASE_URL}/client/res/data_smsnumbers.php?frange=&fclient=&sEcho=2&iColumns=6&sColumns=%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=-1&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=true&bSortable_1=true&mDataProp_2=2&sSearch_2=&bRegex_2=false&bSearchable_2=true&bSortable_2=true&mDataProp_3=3&sSearch_3=&bRegex_3=false&bSearchable_3=true&bSortable_3=true&mDataProp_4=4&sSearch_4=&bRegex_4=false&bSearchable_4=true&bSortable_4=true&mDataProp_5=5&sSearch_5=&bRegex_5=false&bSearchable_5=true&bSortable_5=true&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=asc&iSortingCols=1&_=${ts}`;
-    } else if (type === 'sms') {
-        specificReferer = `${BASE_URL}/client/SMSCDRStats`;
-        targetUrl = `${BASE_URL}/client/res/data_smscdr.php?fdate1=2026-02-17%2000:00:00&fdate2=2099-12-31%2023:59:59&frange=&fnum=&fcli=&fgdate=&fgmonth=&fgrange=&fgnumber=&fgcli=&fg=0&sesskey=${STATE.sessKey}&sEcho=2&iColumns=7&sColumns=%2C%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=-1&mDataProp_0=0&sSearch_0=&bRegex_0=false&bSearchable_0=true&bSortable_0=true&mDataProp_1=1&sSearch_1=&bRegex_1=false&bSearchable_1=true&bSortable_1=true&mDataProp_2=2&sSearch_2=&bRegex_2=false&bSearchable_2=true&bSortable_2=true&mDataProp_3=3&sSearch_3=&bRegex_3=false&bSearchable_3=true&bSortable_3=true&mDataProp_4=4&sSearch_4=&bRegex_4=false&bSearchable_4=true&bSortable_4=true&mDataProp_5=5&sSearch_5=&bRegex_5=false&bSearchable_5=true&bSortable_5=true&mDataProp_6=6&sSearch_6=&bRegex_6=false&bSearchable_6=true&bSortable_6=true&sSearch=&bRegex=false&iSortCol_0=0&sSortDir_0=desc&iSortingCols=1&_=${ts}`;
-    } else {
-        return res.status(400).json({ error: "Invalid type. Use ?type=sms or ?type=numbers" });
-    }
-
-    // --- FETCH WITH AUTO RETRY ON SESSION EXPIRE ---
-    async function fetchWithRetry() {
-        const response = await axios.get(targetUrl, {
-            headers: { 
-                ...COMMON_HEADERS, 
-                "Cookie": STATE.cookie,
-                "Referer": specificReferer
-            },
-            responseType: 'arraybuffer',
-            timeout: 25000
+        const r3 = await axios.get(STATS_PAGE_URL, {
+            headers: { ...COMMON_HEADERS, Cookie: STATE.cookie }
         });
 
-        const checkData = response.data.subarray(0, 1000).toString();
+        const key = extractKey(r3.data);
 
-        if (checkData.includes('<html') || checkData.includes('login')) {
-            console.log("⚠️ Session Expired → Auto ReLogin...");
-            await performLogin();
-
-            const retryResponse = await axios.get(targetUrl, {
-                headers: { 
-                    ...COMMON_HEADERS, 
-                    "Cookie": STATE.cookie,
-                    "Referer": specificReferer
-                },
-                responseType: 'arraybuffer',
-                timeout: 25000
-            });
-
-            return retryResponse;
+        if (key) {
+            STATE.sessKey = key;
+            console.log("🔥 SessKey:", key);
         }
 
-        return response;
+    } catch (e) {
+        console.log("❌ Login Error:", e.message);
+        STATE.cookie = null;
+        STATE.sessKey = null;
     }
 
+    STATE.isLoggingIn = false;
+}
+
+// Keep session alive
+setInterval(() => {
+    if (!STATE.sessKey) performLogin();
+}, 30000);
+
+// ================= MAIN API =================
+app.get('/api', async (req, res) => {
+    const { type } = req.query;
+
+    // WAIT UNTIL LOGIN READY
+    while (!STATE.cookie || !STATE.sessKey) {
+        console.log("⏳ Waiting login...");
+        await performLogin();
+        await sleep(2000);
+    }
+
+    let url, referer;
+
+    if (type === "numbers") {
+        referer = `${BASE_URL}/client/MySMSNumbers`;
+        url = `${BASE_URL}/client/res/data_smsnumbers.php?iDisplayLength=-1&_=${Date.now()}`;
+    }
+    else if (type === "sms") {
+        referer = `${BASE_URL}/client/SMSCDRStats`;
+        const today = new Date().toISOString().split("T")[0];
+        url = `${BASE_URL}/client/res/data_smscdr.php?fdate1=${today}%2000:00:00&fdate2=${today}%2023:59:59&sesskey=${STATE.sessKey}&iDisplayLength=50&_=${Date.now()}`;
+    }
+    else return res.json({ error: "Use ?type=sms or ?type=numbers" });
+
     try {
-        const response = await fetchWithRetry();
-        res.set('Content-Type', 'application/json');
-        res.send(response.data);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+        const r = await axios.get(url, {
+            headers: {
+                ...COMMON_HEADERS,
+                Cookie: STATE.cookie,
+                Referer: referer
+            },
+            responseType: "arraybuffer"
+        });
+
+        const txt = r.data.toString();
+
+        if (txt.includes("login") || txt.includes("<html")) {
+            console.log("⚠️ Session expired");
+            STATE.sessKey = null;
+            return res.json({ error: "Session expired retry" });
+        }
+
+        const json = JSON.parse(txt);
+
+        // 🔥 NEW SMS FIRST
+        if (type === "sms" && json.aaData) {
+            json.aaData.reverse();
+        }
+
+        res.json(json);
+
+    } catch (e) {
+        STATE.sessKey = null;
+        res.json({ error: "Auto retry login" });
     }
 });
 
-// --- START SERVER ---
+// START SERVER
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log("🚀 Server Running");
     performLogin();
 });
