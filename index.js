@@ -13,146 +13,139 @@ const PANEL = {
 
 let cookies = "";
 let sesskey = "";
+let isLoggingIn = false;
 
-// ================= LOGIN =================
+// ---------------- HELPERS ----------------
+function getCountryFromNumber(number) {
+  // Simple placeholder, agar phonenumbers library use karna ho to replace karo
+  if (!number) return "Unknown";
+  if (number.startsWith("60")) return "Malaysia";
+  if (number.startsWith("84")) return "Vietnam";
+  return "Unknown";
+}
+
+// ---------------- LOGIN ----------------
 async function login() {
+  if (isLoggingIn) return;
+  isLoggingIn = true;
+
   try {
     const res = await axios.get(BASE + "/login");
     cookies = res.headers["set-cookie"].join(";");
 
     const match = res.data.match(/What is (\d+) \+ (\d+)/);
-    let ans = "10";
-    if (match) ans = Number(match[1]) + Number(match[2]);
+    const ans = match ? Number(match[1]) + Number(match[2]) : 10;
 
     await axios.post(
       BASE + "/signin",
-      qs.stringify({
-        username: PANEL.username,
-        password: PANEL.password,
-        capt: ans
-      }),
-      {
-        headers: {
-          Cookie: cookies,
-          "Content-Type": "application/x-www-form-urlencoded"
-        }
-      }
+      qs.stringify({ username: PANEL.username, password: PANEL.password, capt: ans }),
+      { headers: { Cookie: cookies, "Content-Type": "application/x-www-form-urlencoded" } }
     );
 
-    const stats = await axios.get(BASE + "/client/SMSCDRStats", {
-      headers: { Cookie: cookies }
-    });
-
+    const stats = await axios.get(BASE + "/client/SMSCDRStats", { headers: { Cookie: cookies } });
     const key = stats.data.match(/sesskey=([^&"]+)/);
     if (key) sesskey = key[1];
 
-    console.log("✅ Login OK");
+    console.log("✅ Login OK, SessKey:", sesskey);
   } catch (e) {
-    console.log("Login Error:", e.message);
+    console.log("❌ Login Error:", e.message);
+  } finally {
+    isLoggingIn = false;
   }
 }
 
-// ================= FETCH NUMBERS =================
+// ---------------- FETCH NUMBERS ----------------
 async function fetchNumbers() {
   try {
     if (!sesskey) await login();
 
-    const url =
-      `${BASE}/client/res/data_smsnumbers.php?frange=&fclient=&sEcho=2&iColumns=6&sColumns=%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=-1&_=${Date.now()}`;
+    const url = `${BASE}/client/res/data_smsnumbers.php?frange=&fclient=&sEcho=2&iColumns=6&sColumns=%2C%2C%2C%2C%2C&iDisplayStart=0&iDisplayLength=-1&_=${Date.now()}`;
+    const res = await axios.get(url, { headers: { Cookie: cookies, "X-Requested-With": "XMLHttpRequest" } });
 
-    const res = await axios.get(url, {
-      headers: {
-        Cookie: cookies,
-        "X-Requested-With": "XMLHttpRequest"
-      }
-    });
+    const rawData = res.data;
 
-    // Agar response me aaData nahi hai, return empty structure
-    if (!res.data.aaData) return {
-      sEcho: 2,
-      iTotalRecords: "0",
-      iTotalDisplayRecords: "0",
-      aaData: []
-    };
-
-    const data = res.data.aaData.map(r => [
-      r[0], // id / name
-      r[1], // empty or number
-      r[2], // number / country
-      r[3], // service
-      r[4], // status
-      r[5]  // extra
-    ]);
+    if (!rawData.aaData || !Array.isArray(rawData.aaData))
+      return { sEcho: 2, iTotalRecords: 0, iTotalDisplayRecords: 0, aaData: [] };
 
     return {
-      sEcho: 2,
-      iTotalRecords: String(data.length),
-      iTotalDisplayRecords: String(data.length),
-      aaData: data
+      sEcho: rawData.sEcho || 2,
+      iTotalRecords: rawData.iTotalRecords || rawData.aaData.length,
+      iTotalDisplayRecords: rawData.iTotalDisplayRecords || rawData.aaData.length,
+      aaData: rawData.aaData
     };
-
   } catch (e) {
     sesskey = "";
-    return {
-      sEcho: 2,
-      iTotalRecords: "0",
-      iTotalDisplayRecords: "0",
-      aaData: []
-    };
+    return { sEcho: 2, iTotalRecords: 0, iTotalDisplayRecords: 0, aaData: [] };
   }
 }
 
-// ================= FETCH SMS =================
+// ---------------- FETCH SMS ----------------
+const seenSMS = new Set();
+
 async function fetchSMS() {
   try {
     if (!sesskey) await login();
 
     const today = new Date().toISOString().split("T")[0];
+    const url = `${BASE}/client/res/data_smscdr.php?fdate1=${today}%2000:00:00&fdate2=${today}%2023:59:59&sesskey=${sesskey}&iDisplayLength=50&_=${Date.now()}`;
 
-    const url =
-      `${BASE}/client/res/data_smscdr.php?` +
-      `fdate1=${today}%2000:00:00&fdate2=${today}%2023:59:59` +
-      `&sesskey=${sesskey}&iDisplayLength=50&_=${Date.now()}`;
+    const res = await axios.get(url, { headers: { Cookie: cookies, "X-Requested-With": "XMLHttpRequest" } });
+    const rawData = res.data;
 
-    const res = await axios.get(url, {
-      headers: {
-        Cookie: cookies,
-        "X-Requested-With": "XMLHttpRequest"
-      }
-    });
+    if (!rawData.aaData || !Array.isArray(rawData.aaData))
+      return { sEcho: 2, iTotalRecords: 0, iTotalDisplayRecords: 0, aaData: [] };
 
-    if (!res.data.aaData) return [];
+    rawData.aaData = rawData.aaData
+      .filter(item => item[2] && item[4]) // valid number & message
+      .filter(item => {
+        const id = item[0] + item[2] + item[4];
+        if (seenSMS.has(id)) return false;
+        seenSMS.add(id);
+        return true;
+      })
+      .map(item => {
+        const number = item[2];
+        const countryName = getCountryFromNumber(number);
 
-    return res.data.aaData.map(r => ({
-      time: r[0],
-      number: r[2],
-      service: r[3],
-      message: r[4]
-    }));
+        return [
+          countryName,             // 0
+          "",                      // 1
+          number,                  // 2
+          "OTP",                   // 3
+          "$ 0",                   // 4 placeholder
+          "SD : <b>0</b> | SW : <b>0</b>" // 5
+        ];
+      });
+
+    return {
+      sEcho: 2,
+      iTotalRecords: rawData.aaData.length,
+      iTotalDisplayRecords: rawData.aaData.length,
+      aaData: rawData.aaData.reverse() // newest first
+    };
+
   } catch (e) {
     sesskey = "";
-    return [];
+    return { sEcho: 2, iTotalRecords: 0, iTotalDisplayRecords: 0, aaData: [] };
   }
 }
 
-// ================= API =================
+// ---------------- API ----------------
 app.get("/api", async (req, res) => {
   const { type } = req.query;
 
-  if (!type) return res.status(400).json({ error: "Use ?type=numbers or ?type=sms" });
-
   if (type === "numbers") {
     const data = await fetchNumbers();
-    return res.json(data);
+    res.json(data);
   } else if (type === "sms") {
     const data = await fetchSMS();
-    return res.json({ status: true, total: data.length, data });
+    res.json(data);
   } else {
-    return res.status(400).json({ error: "Invalid type. Use numbers or sms" });
+    res.status(400).json({ error: "Invalid type. Use ?type=numbers or ?type=sms" });
   }
 });
 
-// ================= START =================
+// ---------------- START ----------------
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, async () => {
